@@ -2,10 +2,7 @@
 
 现代、简洁、偏仪表盘风格的 Komari 主题，适配首页节点总览和单机详情页。
 ## 预览
-![chrome_58MZOrcHxP.png](https://img1.tucang.cc/api/image/show/5d07bbacf1d0c04fd5f535f08dd72bf7)
-![5xMWacnnVW.png](https://img1.tucang.cc/api/image/show/f7a32bb3094b353a283deabd1347d792)
-![jQj2pP2lEW.png](https://img1.tucang.cc/api/image/show/f03505271ca80ec0b36e0187fd36463d)
-![09ZFNjvPHA.png](https://img1.tucang.cc/api/image/show/0fef8e763f081ddd63496d58b2a7612a)
+我的探针：https://vps.775544.xyz/
 ## 结构
 
 ```text
