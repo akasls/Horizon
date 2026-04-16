@@ -1,0 +1,59 @@
+{
+  "name": "Komari Horizon",
+  "short": "Horizon",
+  "description": "A Komari theme styled after a compact VPS status dashboard.",
+  "version": "2.8.2",
+  "author": "OpenAI Codex",
+  "preview": "preview.svg",
+  "configuration": {
+    "type": "managed",
+    "name": "Horizon Settings",
+    "data": [
+      {
+        "name": "视觉风格",
+        "type": "title"
+      },
+      {
+        "key": "accent_color",
+        "name": "强调色",
+        "type": "select",
+        "options": "Blue,Cyan,Emerald,Amber,Rose",
+        "default": "Blue",
+        "help": "切换主题主色。"
+      },
+      {
+        "key": "default_appearance",
+        "name": "默认主题模式",
+        "type": "select",
+        "options": "System,Light,Dark",
+        "default": "System",
+        "help": "仅在用户尚未保存主题偏好时生效。"
+      },
+      {
+        "name": "显示设置",
+        "type": "title"
+      },
+      {
+        "key": "show_top_stats",
+        "name": "显示顶部统计方块",
+        "type": "switch",
+        "default": true,
+        "help": "控制首页顶部 4 个统计方块是否显示。"
+      },
+      {
+        "key": "show_filter_bar",
+        "name": "显示分类和搜索",
+        "type": "switch",
+        "default": true,
+        "help": "统一控制首页分类导航和搜索区域。"
+      },
+      {
+        "key": "show_region_flag",
+        "name": "显示国旗",
+        "type": "switch",
+        "default": true,
+        "help": "在机器名称左侧显示地区国旗。"
+      }
+    ]
+  }
+}
