@@ -2,7 +2,7 @@
   "name": "Komari Horizon",
   "short": "Horizon",
   "description": "A Komari theme styled after a compact VPS status dashboard.",
-  "version": "2.8.2",
+  "version": "2.8.3",
   "author": "OpenAI Codex",
   "preview": "preview.svg",
   "configuration": {

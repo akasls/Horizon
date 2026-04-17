@@ -380,6 +380,8 @@ button {
   white-space: nowrap;
   scrollbar-width: none;
   padding-bottom: 2px;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .group-links::-webkit-scrollbar {
@@ -390,9 +392,12 @@ button {
 .group-link-wrap {
   display: inline-flex;
   align-items: center;
+  background: transparent;
 }
 
 .group-link {
+  appearance: none;
+  -webkit-appearance: none;
   color: var(--text-muted);
   cursor: pointer;
   border: 0;
@@ -401,11 +406,21 @@ button {
   font-size: 0.92rem;
   font-weight: 700;
   transition: color 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  border-radius: 0;
 }
 
 .group-link:hover,
 .group-link.is-active {
   color: var(--primary);
+}
+
+.group-link:focus,
+.group-link:active,
+.group-link:focus-visible {
+  background: transparent;
+  outline: none;
 }
 
 .group-separator {
@@ -659,6 +674,8 @@ button {
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
   image-rendering: -webkit-optimize-contrast;
   transform: translateZ(0);
+  backface-visibility: hidden;
+  flex: 0 0 auto;
 }
 
 .srv-os {
@@ -1998,15 +2015,19 @@ const PING_CACHE = new Map();
 const CHART_MAX_POINTS = 72;
 const FETCH_TIMEOUT_MS = 12000;
 const EXTERNAL_FETCH_TIMEOUT_MS = 5000;
+const STORAGE_KEYS = {
+  appearance: "horizon.appearance",
+  group: "horizon.group"
+};
 
 let pendingNodeRenderFrame = 0;
 let pendingStatsRenderFrame = 0;
 
 const state = {
   language: readStorageValue("i18nextLng", "zh-CN") === "en-US" ? "en-US" : "zh-CN",
-  appearance: APPEARANCE_MODES.includes(readStorageValue("appearance", "system")) ? readStorageValue("appearance", "system") : "system",
+  appearance: APPEARANCE_MODES.includes(readStorageValue(STORAGE_KEYS.appearance, readStorageValue("appearance", "system"))) ? readStorageValue(STORAGE_KEYS.appearance, readStorageValue("appearance", "system")) : "system",
   viewMode: "grid",
-  group: readStorageValue("nodeSelectedGroup", "__all__") || "__all__",
+  group: readStorageValue(STORAGE_KEYS.group, readStorageValue("nodeSelectedGroup", "__all__")) || "__all__",
   query: "",
   searchOpen: false,
   detailNodeId: null,
@@ -2473,7 +2494,7 @@ function renderGroups() {
   elements.groupFilter.querySelectorAll("[data-group]").forEach((button) => {
     button.addEventListener("click", () => {
       state.group = button.dataset.group;
-      writeStorageValue("nodeSelectedGroup", state.group);
+      writeStorageValue(STORAGE_KEYS.group, state.group);
       renderGroups();
       renderNodes();
     });
@@ -2531,18 +2552,11 @@ function populateNodeCard(root, node) {
   const status = root.querySelector(".status-badge");
   status.textContent = online ? t().online : t().offline;
   status.className = `status-badge ${online ? "status-online" : "status-offline"}`;
-  const regionMarkup = renderRegionFlag(node);
-  if (shouldShowFlag() && regionMarkup) {
-    flag.innerHTML = regionMarkup;
-    flag.classList.remove("hidden");
-  } else {
-    flag.innerHTML = "";
-    flag.classList.add("hidden");
-  }
+  setFlagMarkup(flag, node);
   root.querySelector(".dials").innerHTML = [
-    dialGroup(t().cpu, safeNumber(live?.cpu?.usage), online ? `${safeNumber(live?.cpu?.usage).toFixed(1)}%` : t().offline),
-    dialGroup(t().memory, percentValue(live?.ram?.used, live?.ram?.total || node.mem_total), online ? formatBytes(live?.ram?.used) : t().offline),
-    dialGroup(t().disk, percentValue(live?.disk?.used, live?.disk?.total || node.disk_total), online ? formatBytes(live?.disk?.used) : t().offline)
+    dialGroup(t().cpu, safeNumber(live?.cpu?.usage), formatCpuCapacity(node)),
+    dialGroup(t().memory, percentValue(live?.ram?.used, live?.ram?.total || node.mem_total), formatBytes(live?.ram?.total || node.mem_total)),
+    dialGroup(t().disk, percentValue(live?.disk?.used, live?.disk?.total || node.disk_total), formatBytes(live?.disk?.total || node.disk_total))
   ].join("");
   const usage = computeTrafficUsage(node, live);
   const labels = root.querySelectorAll("[data-row]");
@@ -2590,9 +2604,10 @@ function renderPlainPair(upValue, downValue, withArrows = false) {
 }
 
 function renderLatencyLine(ping, online = true) {
-  const latency = online ? (ping.average ? formatLatency(ping.average) : t().loading) : "-1 ms";
-  const loss = online ? formatPercent(ping.loss) : "0.0%";
-  const jitter = online ? formatLatency(ping.jitter) : "0.0 ms";
+  const hasPing = ping.status === "ready";
+  const latency = !online ? "-1 ms" : hasPing ? formatLatency(ping.average) : "-1 ms";
+  const loss = online && hasPing ? formatPercent(ping.loss) : "0.0%";
+  const jitter = online && hasPing ? formatLatency(ping.jitter) : "0.0 ms";
   return `<span class="plain-metric">${escapeHtml(latency)}</span><span class="plain-metric">${ICONS.loss}${escapeHtml(loss)}</span><span class="plain-metric">${ICONS.jitter}${escapeHtml(jitter)}</span>`;
 }
 
@@ -2661,14 +2676,7 @@ function renderDetailPage(includeCharts = true) {
   if (!node) return;
   const live = state.live[node.uuid];
   const online = state.onlineSet.has(node.uuid) && Boolean(live);
-  const regionMarkup = renderRegionFlag(node);
-  if (shouldShowFlag() && regionMarkup) {
-    elements.detailFlag.innerHTML = regionMarkup;
-    elements.detailFlag.classList.remove("hidden");
-  } else {
-    elements.detailFlag.innerHTML = "";
-    elements.detailFlag.classList.add("hidden");
-  }
+  setFlagMarkup(elements.detailFlag, node);
   elements.detailTitle.textContent = node.name || t().unknown;
   elements.detailUuid.textContent = "";
   elements.detailUuid.classList.add("hidden");
@@ -2914,10 +2922,12 @@ function summarizePing(data) {
 }
 
 function getPingOverview(uuid, hours) {
-  const entry = PING_CACHE.get(`${uuid}:${hours}`)?.data;
-  if (!entry) return { average: 0, loss: 0, jitter: 0 };
+  const cacheEntry = PING_CACHE.get(`${uuid}:${hours}`);
+  const entry = cacheEntry?.data;
+  if (!entry) return { average: 0, loss: 0, jitter: 0, status: cacheEntry?.status || "idle" };
   const overview = summarizePing(entry);
-  return { average: overview.average, loss: overview.loss, jitter: overview.jitter };
+  if (!overview.sampleCount) return { average: 0, loss: 0, jitter: 0, status: cacheEntry?.status === "loading" ? "loading" : "empty" };
+  return { average: overview.average, loss: overview.loss, jitter: overview.jitter, status: "ready" };
 }
 
 function renderConnectionState() {
@@ -2945,7 +2955,7 @@ function updateAuthLink() {
 function cycleAppearance() {
   const next = APPEARANCE_MODES[(APPEARANCE_MODES.indexOf(state.appearance) + 1) % APPEARANCE_MODES.length];
   state.appearance = next;
-  writeStorageValue("appearance", next);
+  writeStorageValue(STORAGE_KEYS.appearance, next);
   applyAppearance();
   renderChrome();
   if (state.detailNodeId) renderDetailPage();
@@ -2992,7 +3002,7 @@ function cycleView() {
 
 function applyThemeSettings() {
   elements.root.dataset.accent = String(readSetting("accent_color", "Blue")).toLowerCase();
-  if (!hasStorageValue("appearance")) {
+  if (!hasStorageValue(STORAGE_KEYS.appearance)) {
     state.appearance = resolveAppearanceMode(readSetting("default_appearance", "System"));
     applyAppearance();
   }
@@ -3274,17 +3284,18 @@ function writeStorageValue(key, value) {
   }
 }
 function normalizeSharedStorage() {
-  [
-    ["nodeSelectedGroup", state.group],
-    ["nodeViewMode", state.viewMode],
-    ["i18nextLng", state.language]
-  ].forEach(([key, fallback]) => {
-    const value = readStorageValue(key, fallback);
-    writeStorageValue(key, value);
-  });
-  if (hasStorageValue("appearance")) {
-    writeStorageValue("appearance", resolveAppearanceMode(readStorageValue("appearance", state.appearance)));
+  writeStorageValue(STORAGE_KEYS.group, readStorageValue(STORAGE_KEYS.group, readStorageValue("nodeSelectedGroup", state.group)));
+  if (!hasStorageValue(STORAGE_KEYS.appearance)) {
+    writeStorageValue(STORAGE_KEYS.appearance, resolveAppearanceMode(readStorageValue("appearance", state.appearance)));
+  } else {
+    writeStorageValue(STORAGE_KEYS.appearance, resolveAppearanceMode(readStorageValue(STORAGE_KEYS.appearance, state.appearance)));
   }
+  clearLegacySharedStorage();
+}
+function clearLegacySharedStorage() {
+  safeRemoveStorage("appearance");
+  safeRemoveStorage("nodeSelectedGroup");
+  safeRemoveStorage("nodeViewMode");
 }
 function hasStorageValue(key) {
   try {
@@ -3292,6 +3303,13 @@ function hasStorageValue(key) {
     return raw !== null && raw !== undefined && raw !== "";
   } catch (error) {
     return false;
+  }
+}
+function safeRemoveStorage(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch (error) {
+    return;
   }
 }
 function resolveAppearanceMode(value) {
@@ -3354,11 +3372,41 @@ function detectSiteIconUrl() {
   return sanitizeUrl(candidate) || "/favicon.ico";
 }
 
+function setFlagMarkup(container, input) {
+  if (!container) return;
+  const info = renderRegionFlagInfo(input);
+  if (!shouldShowFlag() || !info.markup) {
+    if (container.dataset.flagKey !== "") {
+      container.innerHTML = "";
+      container.dataset.flagKey = "";
+    }
+    container.classList.add("hidden");
+    return;
+  }
+  if (container.dataset.flagKey !== info.key) {
+    container.innerHTML = info.markup;
+    container.dataset.flagKey = info.key;
+  }
+  container.classList.remove("hidden");
+}
+
 function renderRegionFlag(input) {
+  return renderRegionFlagInfo(input).markup;
+}
+
+function renderRegionFlagInfo(input) {
   const code = resolveRegionCode(input);
   const emoji = resolveRegionFlagEmoji(input);
-  if (code) return `<img class="flag-image" src="${escapeAttribute(flagAssetUrl(code))}" alt="${escapeAttribute(code.toUpperCase())}" loading="lazy" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous">`;
-  return emoji ? escapeHtml(emoji) : "";
+  if (code) {
+    return {
+      key: `code:${code}`,
+      markup: `<img class="flag-image" src="${escapeAttribute(flagAssetUrl(code))}" alt="${escapeAttribute(code.toUpperCase())}" loading="eager" decoding="async" referrerpolicy="no-referrer" crossorigin="anonymous">`
+    };
+  }
+  return {
+    key: emoji ? `emoji:${emoji}` : "",
+    markup: emoji ? escapeHtml(emoji) : ""
+  };
 }
 
 function resolveRegionCode(input) {
@@ -3574,6 +3622,10 @@ function formatMoney(value, currency = "CNY") {
   } catch (error) {
     return `${currency} ${amount.toFixed(2)}`;
   }
+}
+function formatCpuCapacity(node) {
+  const cores = safeNumber(node?.cpu_cores);
+  return cores > 0 ? `${cores} Cores` : "--";
 }
 function formatDuration(totalSeconds) { const seconds = Math.max(0, Math.floor(safeNumber(totalSeconds))), days = Math.floor(seconds / 86400), hours = Math.floor((seconds % 86400) / 3600), minutes = Math.floor((seconds % 3600) / 60); if (state.language === "zh-CN") { if (days > 0) return `${days}天 ${hours}时`; if (hours > 0) return `${hours}时 ${minutes}分`; return `${minutes}分`; } if (days > 0) return `${days}d ${hours}h`; if (hours > 0) return `${hours}h ${minutes}m`; return `${minutes}m`; }
 function formatDateTime(value) { try { return new Intl.DateTimeFormat(state.language, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); } catch (error) { return String(value || "--"); } }

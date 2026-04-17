@@ -367,6 +367,8 @@ button {
   white-space: nowrap;
   scrollbar-width: none;
   padding-bottom: 2px;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .group-links::-webkit-scrollbar {
@@ -377,9 +379,12 @@ button {
 .group-link-wrap {
   display: inline-flex;
   align-items: center;
+  background: transparent;
 }
 
 .group-link {
+  appearance: none;
+  -webkit-appearance: none;
   color: var(--text-muted);
   cursor: pointer;
   border: 0;
@@ -388,11 +393,21 @@ button {
   font-size: 0.92rem;
   font-weight: 700;
   transition: color 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  border-radius: 0;
 }
 
 .group-link:hover,
 .group-link.is-active {
   color: var(--primary);
+}
+
+.group-link:focus,
+.group-link:active,
+.group-link:focus-visible {
+  background: transparent;
+  outline: none;
 }
 
 .group-separator {
@@ -646,6 +661,8 @@ button {
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
   image-rendering: -webkit-optimize-contrast;
   transform: translateZ(0);
+  backface-visibility: hidden;
+  flex: 0 0 auto;
 }
 
 .srv-os {
