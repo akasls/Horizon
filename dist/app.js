@@ -186,6 +186,9 @@ const PING_CACHE = new Map();
 const CHART_MAX_POINTS = 72;
 const FETCH_TIMEOUT_MS = 12000;
 const EXTERNAL_FETCH_TIMEOUT_MS = 5000;
+const HISTORY_CACHE_MAX_AGE_MS = 60000;
+const WS_STALE_AFTER_MS = 25000;
+const WS_WATCHDOG_INTERVAL_MS = 5000;
 const STORAGE_KEYS = {
   appearance: "horizon.appearance",
   group: "horizon.group"
@@ -218,7 +221,10 @@ const state = {
   connectionMode: "loading",
   ws: null,
   wsTicker: null,
+  wsWatchdog: null,
+  lastLiveMessageAt: 0,
   fallbackTicker: null,
+  fallbackPromise: null,
   clockTicker: null
 };
 
@@ -307,6 +313,8 @@ function bindEvents() {
   }));
   elements.detailBack.addEventListener("click", () => setRouteNode(null));
   window.addEventListener("popstate", syncRoute);
+  document.addEventListener("visibilitychange", handlePageResume);
+  window.addEventListener("focus", handlePageResume);
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   if (typeof media.addEventListener === "function") media.addEventListener("change", handleSystemAppearanceChange);
   else if (typeof media.addListener === "function") media.addListener(handleSystemAppearanceChange);
@@ -514,9 +522,12 @@ async function loadNodes() {
 }
 
 function connectRealtime() {
-  clearInterval(state.fallbackTicker);
-  state.fallbackTicker = null;
-  if (state.ws) {
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
+  if (!state.fallbackTicker) {
+    state.connectionMode = "loading";
+    renderConnectionState();
+  }
+  if (state.ws && state.ws.readyState !== WebSocket.CLOSED) {
     try { state.ws.close(); } catch (error) { console.warn(error); }
   }
 
@@ -525,16 +536,20 @@ function connectRealtime() {
   state.ws = ws;
 
   ws.onopen = () => {
+    stopFallbackPolling();
     state.connectionMode = "live";
+    state.lastLiveMessageAt = Date.now();
     renderConnectionState();
     ws.send("get");
     clearInterval(state.wsTicker);
     state.wsTicker = window.setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.send("get");
     }, 8000);
+    startRealtimeWatchdog();
   };
 
   ws.onmessage = (event) => {
+    state.lastLiveMessageAt = Date.now();
     const payload = safeJsonParse(event.data);
     const data = payload?.data || {};
     state.live = data.data || {};
@@ -542,22 +557,48 @@ function connectRealtime() {
     renderGlobalStats();
     renderConnectionState();
     renderNodes();
-    if (state.detailNodeId) renderDetailPage(false);
+    if (state.detailNodeId) {
+      renderDetailPage(false);
+      refreshDetailHistory(state.detailNodeId, state.detailHours);
+    }
     updateTime();
   };
 
-  ws.onerror = startFallbackPolling;
+  ws.onerror = () => {
+    if (state.ws === ws) state.ws = null;
+    startFallbackPolling();
+  };
   ws.onclose = () => {
+    if (state.ws === ws) state.ws = null;
     clearInterval(state.wsTicker);
+    state.wsTicker = null;
+    stopRealtimeWatchdog();
     startFallbackPolling();
   };
 }
 
-function startFallbackPolling() {
-  if (state.fallbackTicker) return;
-  state.connectionMode = "fallback";
-  renderConnectionState();
-  const run = async () => {
+function stopFallbackPolling() {
+  clearInterval(state.fallbackTicker);
+  state.fallbackTicker = null;
+}
+
+function startRealtimeWatchdog() {
+  stopRealtimeWatchdog();
+  state.wsWatchdog = window.setInterval(() => {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - state.lastLiveMessageAt <= WS_STALE_AFTER_MS) return;
+    try { state.ws.close(); } catch (error) { console.warn(error); }
+  }, WS_WATCHDOG_INTERVAL_MS);
+}
+
+function stopRealtimeWatchdog() {
+  clearInterval(state.wsWatchdog);
+  state.wsWatchdog = null;
+}
+
+async function pollLatestNodes() {
+  if (state.fallbackPromise) return state.fallbackPromise;
+  state.fallbackPromise = (async () => {
     if (!state.nodes.length) return;
     const entries = await Promise.all(state.nodes.map(async (node) => {
       try {
@@ -573,11 +614,26 @@ function startFallbackPolling() {
     renderGlobalStats();
     renderConnectionState();
     renderNodes();
-    if (state.detailNodeId) renderDetailPage(false);
+    if (state.detailNodeId) {
+      renderDetailPage(false);
+      refreshDetailHistory(state.detailNodeId, state.detailHours);
+    }
     updateTime();
-  };
-  run();
-  state.fallbackTicker = window.setInterval(run, 30000);
+  })().finally(() => {
+    state.fallbackPromise = null;
+  });
+  return state.fallbackPromise;
+}
+
+function startFallbackPolling() {
+  clearInterval(state.wsTicker);
+  state.wsTicker = null;
+  stopRealtimeWatchdog();
+  state.connectionMode = "fallback";
+  renderConnectionState();
+  pollLatestNodes();
+  if (state.fallbackTicker) return;
+  state.fallbackTicker = window.setInterval(pollLatestNodes, 30000);
 }
 
 function renderChrome() {
@@ -917,7 +973,7 @@ function buildDetailOverview(node, live) {
 }
 
 async function loadDetailData(uuid, hours) {
-  await Promise.allSettled([loadLoadHistory(uuid, hours), loadPingHistory(uuid, hours)]);
+  await Promise.allSettled([loadLoadHistory(uuid, hours, { force: true }), loadPingHistory(uuid, hours, { force: true })]);
   if (state.detailNodeId !== uuid || state.detailHours !== hours) return;
   const node = state.nodes.find((item) => item.uuid === uuid);
   if (!node) return;
@@ -925,39 +981,43 @@ async function loadDetailData(uuid, hours) {
   renderDetailPing(node);
 }
 
-async function loadLoadHistory(uuid, hours) {
+async function loadLoadHistory(uuid, hours, options = {}) {
   const key = `${uuid}:${hours}`;
   const current = LOAD_CACHE.get(key);
-  if (current?.status === "loaded") return current?.data || null;
+  const force = Boolean(options.force);
+  if (!force && current?.status === "loaded" && isCacheFresh(current, HISTORY_CACHE_MAX_AGE_MS)) return current?.data || null;
   if (current?.status === "loading" && current?.promise) return current.promise;
   const request = (async () => {
     const payload = await fetchJson(`/api/records/load?uuid=${encodeURIComponent(uuid)}&hours=${hours}`);
     const data = payload?.data || { records: [] };
-    LOAD_CACHE.set(key, { status: "loaded", data });
+    LOAD_CACHE.set(key, { status: "loaded", data, fetchedAt: Date.now() });
     return data;
   })().catch(() => {
-    LOAD_CACHE.set(key, { status: "error", data: { records: [] } });
-    return { records: [] };
+    const staleData = current?.data || { records: [] };
+    LOAD_CACHE.set(key, { status: staleData.records?.length ? "loaded" : "error", data: staleData, fetchedAt: current?.fetchedAt || 0 });
+    return staleData;
   });
-  LOAD_CACHE.set(key, { status: "loading", data: current?.data || { records: [] }, promise: request });
+  LOAD_CACHE.set(key, { status: "loading", data: current?.data || { records: [] }, promise: request, fetchedAt: current?.fetchedAt || 0 });
   return request;
 }
 
-async function loadPingHistory(uuid, hours) {
+async function loadPingHistory(uuid, hours, options = {}) {
   const key = `${uuid}:${hours}`;
   const current = PING_CACHE.get(key);
-  if (current?.status === "loaded") return current?.data || null;
+  const force = Boolean(options.force);
+  if (!force && current?.status === "loaded" && isCacheFresh(current, HISTORY_CACHE_MAX_AGE_MS)) return current?.data || null;
   if (current?.status === "loading" && current?.promise) return current.promise;
   const request = (async () => {
     const payload = await fetchJson(`/api/records/ping?uuid=${encodeURIComponent(uuid)}&hours=${hours}`);
     const data = payload?.data || { records: [], tasks: [] };
-    PING_CACHE.set(key, { status: "loaded", data });
+    PING_CACHE.set(key, { status: "loaded", data, fetchedAt: Date.now() });
     return data;
   })().catch(() => {
-    PING_CACHE.set(key, { status: "error", data: { records: [], tasks: [] } });
-    return { records: [], tasks: [] };
+    const staleData = current?.data || { records: [], tasks: [] };
+    PING_CACHE.set(key, { status: staleData.records?.length ? "loaded" : "error", data: staleData, fetchedAt: current?.fetchedAt || 0 });
+    return staleData;
   });
-  PING_CACHE.set(key, { status: "loading", data: current?.data || { records: [], tasks: [] }, promise: request });
+  PING_CACHE.set(key, { status: "loading", data: current?.data || { records: [], tasks: [] }, promise: request, fetchedAt: current?.fetchedAt || 0 });
   return request;
 }
 
@@ -1068,9 +1128,32 @@ function renderDetailPing(node) {
 function primeVisiblePingData(nodes) {
   nodes.forEach((node) => {
     const key = `${node.uuid}:24`;
-    if (!PING_CACHE.has(key)) loadPingHistory(node.uuid, 24).then(() => {
+    const entry = PING_CACHE.get(key);
+    if (entry?.status === "loading") return;
+    if (entry?.status === "loaded" && isCacheFresh(entry, HISTORY_CACHE_MAX_AGE_MS)) return;
+    loadPingHistory(node.uuid, 24, { force: Boolean(entry) }).then(() => {
       if (!state.detailNodeId) scheduleNodesRender();
     });
+  });
+}
+
+function refreshDetailHistory(uuid, hours) {
+  const loadEntry = LOAD_CACHE.get(`${uuid}:${hours}`);
+  const pingEntry = PING_CACHE.get(`${uuid}:${hours}`);
+  const tasks = [];
+  if (!loadEntry || !isCacheFresh(loadEntry, HISTORY_CACHE_MAX_AGE_MS)) {
+    tasks.push(loadLoadHistory(uuid, hours, { force: Boolean(loadEntry) }));
+  }
+  if (!pingEntry || !isCacheFresh(pingEntry, HISTORY_CACHE_MAX_AGE_MS)) {
+    tasks.push(loadPingHistory(uuid, hours, { force: Boolean(pingEntry) }));
+  }
+  if (!tasks.length) return;
+  Promise.allSettled(tasks).then(() => {
+    if (state.detailNodeId !== uuid || state.detailHours !== hours) return;
+    const node = state.nodes.find((item) => item.uuid === uuid);
+    if (!node) return;
+    renderDetailLoadCharts(node);
+    renderDetailPing(node);
   });
 }
 
@@ -1162,6 +1245,18 @@ function handleSystemAppearanceChange() {
   renderChrome();
   if (state.detailNodeId) renderDetailPage();
   else renderNodes();
+}
+
+function handlePageResume() {
+  if (document.visibilityState && document.visibilityState !== "visible") return;
+  if (state.ws?.readyState === WebSocket.OPEN) {
+    try { state.ws.send("get"); } catch (error) { console.warn(error); }
+  } else {
+    connectRealtime();
+    if (state.connectionMode === "fallback" || state.fallbackTicker) pollLatestNodes();
+  }
+  if (state.detailNodeId) refreshDetailHistory(state.detailNodeId, state.detailHours);
+  else primeVisiblePingData(filteredNodes().slice(0, 12));
 }
 
 function cycleView() {
@@ -1745,6 +1840,7 @@ function countryCodeFromText(value) {
 }
 function simplifyOsName(value) { const raw = String(value || "").trim(); if (!raw) return ""; const presets = [[/debian/i, "Debian"], [/ubuntu/i, "Ubuntu"], [/centos/i, "CentOS"], [/almalinux|alma/i, "AlmaLinux"], [/rocky/i, "Rocky"], [/fedora/i, "Fedora"], [/alpine/i, "Alpine"], [/arch/i, "Arch"], [/oracle/i, "Oracle"], [/freebsd/i, "FreeBSD"], [/openbsd/i, "OpenBSD"], [/windows/i, "Windows"], [/darwin|mac ?os/i, "macOS"]]; for (const [pattern, label] of presets) if (pattern.test(raw)) return label; return raw.split(/\s+/).slice(0, 2).join(" "); }
 function updateTime() { const latest = visibleNodes().map((node) => state.live[node.uuid]?.updated_at).filter(Boolean).sort().pop(); elements.updateTime.textContent = latest ? `${t().updatedAt} ${formatDateTime(latest)}` : "--"; }
+function isCacheFresh(entry, maxAge) { return Boolean(entry?.fetchedAt) && (Date.now() - entry.fetchedAt) < maxAge; }
 function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
