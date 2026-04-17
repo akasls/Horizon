@@ -103,9 +103,15 @@ Horizon 的设计方向不是传统“列表堆字段”，而是更偏现代状
 1. 将 `dist/`、`komari-theme.json`、`preview.svg` 一起打包为 zip。
 2. 在 Komari 后台上传该 zip 并启用主题。
 3. 如需调整配色或显示项，可在主题设置中修改对应配置。
-4. 当前本地打包文件名为 `Komari-Horizon.zip`。
+4. Windows 下不要直接用 `Compress-Archive` 打包主题目录，否则 zip 内部路径可能写成反斜杠，导致 Linux 上的 Komari 找不到 `dist/index.html` 并回退到默认主题。当前仓库提供了 `scripts/package-theme.ps1` 用于生成兼容的发布包。
+5. 当前本地打包文件名为 `Komari-Horizon.zip`。
 
 ## 更新日志
+
+### v2.8.5
+
+- 修复 Windows 打包时 zip 内部路径分隔符错误，导致 Linux 上启用主题后静默回退到默认主题的问题
+- 新增 `scripts/package-theme.ps1`，统一生成兼容 Komari Linux 部署环境的发布包
 
 ### v2.8.4
 
