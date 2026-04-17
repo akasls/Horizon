@@ -175,7 +175,7 @@ const ICONS = {
   bolt: "<svg viewBox='0 0 24 24'><path d='M13 2 4 14h6l-1 8 9-12h-6Z'/></svg>",
   network: "<svg viewBox='0 0 24 24'><path d='M7 17h10M5 12h14M8 7h8'/></svg>",
   category: "<svg viewBox='0 0 24 24'><path d='M4 7h16M4 12h10M4 17h13'/></svg>",
-  loss: "<svg viewBox='0 0 24 24'><path d='M6 6h12v12H6z'/><path d='m9 9 6 6M15 9l-6 6'/></svg>",
+  loss: "<svg viewBox='0 0 24 24'><circle cx='8.5' cy='8.5' r='2'/><circle cx='15.5' cy='15.5' r='2'/><path d='M16 8 8 16'/></svg>",
   jitter: "<svg viewBox='0 0 24 24'><path d='M3 12c2.5 0 2.5-4 5-4s2.5 8 5 8 2.5-4 5-4 2.5 4 5 4'/></svg>"
 };
 
